@@ -75,26 +75,19 @@ dml_micros()
 
 // Function to generate Gaussian noise using Box-Muller transform
 double gaussian_box_muller() {
-    static std::mt19937 gen(std::random_device{}());
-    static std::uniform_real_distribution<double> dis(0.0, 1.0);
+    static std::mt19937 generator(std::random_device{}());
+    static std::normal_distribution<double> distribution(0.0, 1.0);
 
-    return dis(gen);
+    return distribution(generator);
 }
 
 // Function to calculate the Black-Scholes call option price using Monte Carlo method
-double black_scholes_monte_carlo(ui64 S0, ui64 K, double T, double r, double sigma, double q, ui64 num_simulations, double precomputed_stuff, double precomputed_return) {
+double black_scholes_monte_carlo(ui64 S0, ui64 K, double T, double r, double sigma, double q, ui64 num_simulations) {
     double sum_payoffs = 0.0;
-    double temp = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
-
-    double Z_tab[num_simulations];
 
     for (ui64 i = 0; i < num_simulations; ++i) {
-        Z_tab[i] = gaussian_box_muller();
-    }
-
-    #pragma omp parallel for reduction(+:sum_payoffs) schedule(runtime)
-    for (ui64 i = 0; i < num_simulations; ++i) {
-		double ST = S0 * exp(temp * Z_tab[i]);
+        double Z = gaussian_box_muller();
+		double ST = S0 * exp((r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T) * Z);
         double payoff = std::max(ST - K, 0.0);
         sum_payoffs += payoff;
     }
@@ -126,12 +119,9 @@ int main(int argc, char* argv[]) {
 
     std::vector<double> errors;
     double t1=dml_micros();
-
-    double precomputed_return = exp(-r * T) * (1.0 / num_simulations);  // This might lose in precision!!!
-    double precomputed_start = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
     for (ui64 run = 0; run < num_runs; ++run) {
-        double theoretical_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations, precomputed_start, precomputed_return);
-        double actual_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations, precomputed_start, precomputed_return);
+        double theoretical_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations);
+        double actual_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations);
         double relative_error = std::abs(theoretical_price - actual_price) / actual_price;
         errors.push_back(relative_error);
 
