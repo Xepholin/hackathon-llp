@@ -55,6 +55,7 @@
 #include <limits>
 #include <algorithm>
 #include <iomanip>   // For setting precision
+#include <stdlib.h>
 
 #define ui64 u_int64_t
 
@@ -76,15 +77,20 @@ double gaussian_box_muller() {
 }
 
 // Function to calculate the Black-Scholes call option price using Monte Carlo method
-double black_scholes_monte_carlo(ui64 S0, ui64 K, double T, double r, double sigma, double q, ui64 num_simulations) {
+double black_scholes_monte_carlo(ui64 S0, ui64 K, double T, double r, double sigma, double q, ui64 num_simulations, double precomputed_stuff, double precomputed_return) {
     double sum_payoffs = 0.0;
+    double Z_tab[num_simulations];
     for (ui64 i = 0; i < num_simulations; ++i) {
-        double Z = gaussian_box_muller();
-        double ST = S0 * exp((r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T) * Z);
+        Z_tab[i] = gaussian_box_muller();
+    }
+    #pragma omp parallel for reduction(+:sum_payoffs) schedule(runtime)  // Makes relative error explode
+    for (ui64 i = 0; i < num_simulations; ++i) {
+        // double Z = gaussian_box_muller();
+        double ST = S0 * exp(precomputed_stuff * Z_tab[i]);
         double payoff = std::max(ST - K, 0.0);
         sum_payoffs += payoff;
     }
-    return exp(-r * T) * (sum_payoffs / num_simulations);
+    return sum_payoffs * precomputed_return;
 }
 
 int main(int argc, char* argv[]) {
@@ -112,9 +118,12 @@ int main(int argc, char* argv[]) {
 
     std::vector<double> errors;
     double t1=dml_micros();
+    // Precomputing some things to avoid doing such calculation each time
+    double precomputed_return = exp(-r * T) * (1.0 / num_simulations);  // This might lose in precision!!!
+    double precomputed_start = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
     for (ui64 run = 0; run < num_runs; ++run) {
-        double theoretical_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations);
-        double actual_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations);
+        double theoretical_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations, precomputed_start, precomputed_return);
+        double actual_price = black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations, precomputed_start, precomputed_return);
         double relative_error = std::abs(theoretical_price - actual_price) / actual_price;
         errors.push_back(relative_error);
 
