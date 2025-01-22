@@ -14,4 +14,4 @@
 # Commandes a exécuter
 # Les lignes s'exécutent une à une
 
-OMP_PLACES=cores OMP_PROC_BIND=close ./maqao OV -R1 --executable="tested_program.exe" --run-command="<executable> 1000000 1000"
+OMP_PLACES=cores OMP_PROC_BIND=close OMP_NUM_THREADS=96 ./maqao OV -R1 --executable="tested_program.exe" --run-command="<executable> 1000000 1000"

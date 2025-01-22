@@ -14,4 +14,4 @@
 # Commandes a exécuter
 # Les lignes s'exécutent une à une
 
-OMP_PLACES=cores OMP_PROC_BIND=close ./tested_program.exe 1000000 1000
+OMP_PLACES=cores OMP_PROC_BIND=close OMP_NUM_THREADS=96 ./tested_program.exe 1000000 1000

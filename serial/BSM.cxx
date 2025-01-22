@@ -37,6 +37,7 @@ Global initial seed: 4208275479      argv[1]= 100     argv[2]= 1000000
 #include <limits>
 #include <algorithm>
 #include <iomanip>   // For setting precision
+#include <armpl.h>
 
 #define ui64 u_int64_t
 
@@ -50,22 +51,28 @@ dml_micros()
         return((tv.tv_sec*1000000.0)+tv.tv_usec);
 }
 
-static std::mt19937 generator(std::random_device{}());
-static std::normal_distribution<double> distribution(0.0, 1.0);
+
+// Function to generate Gaussian noise using ArmPL
+void gaussian_armpl(const int taille, double* noise, VSLStreamStatePtr stream) {
+    vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, taille, noise, 0, 1);
+}
+
 
 // Function to generate Gaussian noise using Box-Muller transform
 double gaussian_box_muller() {
+    static std::mt19937 generator(std::random_device{}());
+    static std::normal_distribution<double> distribution(0.0, 1.0);
     return distribution(generator);
 }
 
 // Function to calculate the Black-Scholes call option price using Monte Carlo method
-double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations, double precomputed_stuff, double precomputed_return) {
+double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations, double precomputed_stuff, double precomputed_return, VSLStreamStatePtr stream) {
     double sum_payoffs = 0.0;
     double Z_tab[num_simulations];
-    for (ui64 i = 0; i < num_simulations; ++i) {
-        Z_tab[i] = gaussian_box_muller();
-    }
-    // #pragma omp parallel for reduction(+:sum_payoffs) schedule(runtime)  // Makes relative error explode
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     Z_tab[i] = gaussian_box_muller();
+    // }
+    gaussian_armpl(num_simulations, Z_tab, stream);
     for (ui64 i = 0; i < num_simulations; ++i) {
         // double Z = gaussian_box_muller();
         double ST = S0 * exp(precomputed_stuff * Z_tab[i]);
@@ -106,12 +113,14 @@ int main(int argc, char* argv[]) {
     double precomputed_start = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
     #pragma omp parallel default(shared)
     {
+        VSLStreamStatePtr stream;
+        vslNewStream(&stream, VSL_BRNG_MT19937, global_seed);
         double partial_sum = 0.0;
         #pragma omp for
         for (ui64 run = 0; run < num_runs; ++run) {
-            partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return);
+            partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, stream);
         }
-        #pragma omp atomic
+        #pragma omp critical
         sum += partial_sum;
     }
     double t2=dml_micros();
