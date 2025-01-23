@@ -58,6 +58,7 @@ void gaussian_armpl(const int taille, double* noise, VSLStreamStatePtr stream) {
 }
 
 
+// Unused
 // Function to generate Gaussian noise using Box-Muller transform
 double gaussian_box_muller() {
     static std::mt19937 generator(std::random_device{}());
@@ -68,36 +69,42 @@ double gaussian_box_muller() {
 // Function to calculate the Black-Scholes call option price using Monte Carlo method
 double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations, double precomputed_stuff, double precomputed_return, VSLStreamStatePtr stream, double* Z_tab, double* tmpliste) {
     double sum_payoffs = 0.0;
-    // for (ui64 i = 0; i < num_simulations; ++i) {
-    //     Z_tab[i] = gaussian_box_muller();
-    // }
-    // gaussian_armpl(num_simulations, Z_tab, stream);
+    gaussian_armpl(num_simulations, Z_tab, stream);
     // Attempting to vectorize some parts of the computation
     // This might be slower due to reading tmplist multiple times
-    // Maybe cacheblocking?
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i) {
-        tmpliste[i] = precomputed_stuff * Z_tab[i];
-    }
-    for (ui64 i = 0; i < num_simulations; ++i) {
-        tmpliste[i] = exp(tmpliste[i]);
-    }
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i) {
-        tmpliste[i] = S0 * tmpliste[i] - K;
-    }
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i) {
-        // double Z = gaussian_box_muller();
-        if (tmpliste[i] > 0.0)
-            sum_payoffs += tmpliste[i];
-    }
+    // #pragma vector always
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     tmpliste[i] = precomputed_stuff * Z_tab[i];
+    // }
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     tmpliste[i] = exp(tmpliste[i]);
+    // }
+    // #pragma vector always
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     tmpliste[i] = S0 * tmpliste[i] - K;
+    // }
+    // #pragma vector always
     // for (ui64 i = 0; i < num_simulations; ++i) {
     //     // double Z = gaussian_box_muller();
-    //     double ST = S0 * exp(precomputed_stuff * Z_tab[i]);
-    //     double payoff = std::max(ST - K, 0.0);
-    //     sum_payoffs += payoff;
+    //     if (tmpliste[i] > 0.0)
+    //         sum_payoffs += tmpliste[i];
     // }
+
+    // #pragma vector always
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     tmpliste[i] = exp(precomputed_stuff * Z_tab[i]);
+    // }
+    // #pragma omp unroll
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     double payoff = S0 * tmpliste[i] - K;
+    //     sum_payoffs += std::max(payoff, 0.0);
+    // }
+
+    for (ui64 i = 0; i < num_simulations; ++i) {
+        double ST = (S0 * exp(precomputed_stuff * Z_tab[i])) - K;
+        double payoff = std::max(ST, 0.0);
+        sum_payoffs += payoff;
+    }
     return sum_payoffs * precomputed_return;
 }
 
@@ -128,27 +135,41 @@ int main(int argc, char* argv[]) {
     double sum=0.0;
     double t1=dml_micros();
 
+    // https://developer.arm.com/documentation/101004/2410/Open-Random-Number-Generation--OpenRNG--Reference-Guide/Examples/skipahead-c?lang=en#skipahead-c
+    VSLStreamStatePtr parallel_streams[num_runs];
+    // VSLStreamStatePtr stream;
+    // Seems faster than VSL_BRNG_MT19937. DO NOT USE VSL_BRNG_NONDETERM AS IT IS SUPER SLOW AND DISREGARDS SEED!!!
+    // vslNewStream(&stream, VSL_BRNG_MCG59, global_seed);
+    vslNewStream(&parallel_streams[0], VSL_BRNG_MCG59, global_seed);
+    for (ui64 i = 1; i < num_runs; ++i)
+    {
+        vslCopyStream(&parallel_streams[i], parallel_streams[i - 1]);
+        vslSkipAheadStream(parallel_streams[i], num_simulations * i);
+    }
+
     double precomputed_return = exp(-r * T) * (1.0 / num_simulations);  // This might lose in precision!!!
     double precomputed_start = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
-    VSLStreamStatePtr stream;
-    vslNewStream(&stream, VSL_BRNG_MT19937, global_seed);
-    double* bigbigarray = (double*)malloc(num_simulations * num_runs * sizeof(double));
-    gaussian_armpl(num_simulations * num_runs, bigbigarray, stream);
     #pragma omp parallel default(shared)
     {
         double partial_sum = 0.0;
-        // double* Z_tab = (double*)malloc(num_simulations * sizeof(double));
+        double* Z_tab = (double*)malloc(num_simulations * sizeof(double));
         double* tmpliste = (double*)malloc(num_simulations * sizeof(double));
         #pragma omp for schedule(runtime)
         for (ui64 run = 0; run < num_runs; ++run) {
-            partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, stream, bigbigarray+(run*num_simulations), tmpliste);
+            partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, parallel_streams[run], Z_tab, tmpliste);
+            // partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, stream, Z_tab, tmpliste);
         }
-        // free(Z_tab);
+        free(Z_tab);
         free(tmpliste);
         #pragma omp atomic
         sum += partial_sum;
     }
-    free(bigbigarray);
+    // vslDeleteStream(&stream);
+    for (ui64 i = 0; i < num_runs; ++i)
+    {
+        vslDeleteStream(&parallel_streams[i]);
+    }
+
     double t2=dml_micros();
     std::cout << std::fixed << std::setprecision(6) << " value= " << sum/num_runs << " in " << (t2-t1)/1000000.0 << " seconds" << std::endl;
 
