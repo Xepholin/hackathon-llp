@@ -37,6 +37,7 @@ Global initial seed: 4208275479      argv[1]= 100     argv[2]= 1000000
 #include <limits>
 #include <algorithm>
 #include <iomanip>   // For setting precision
+
 #include <armpl.h>
 
 #define ui64 u_int64_t
@@ -90,21 +91,21 @@ double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations, double p
     //         sum_payoffs += tmpliste[i];
     // }
 
-    // #pragma vector always
-    // for (ui64 i = 0; i < num_simulations; ++i) {
-    //     tmpliste[i] = exp(precomputed_stuff * Z_tab[i]);
-    // }
-    // #pragma omp unroll
-    // for (ui64 i = 0; i < num_simulations; ++i) {
-    //     double payoff = S0 * tmpliste[i] - K;
-    //     sum_payoffs += std::max(payoff, 0.0);
-    // }
-
     for (ui64 i = 0; i < num_simulations; ++i) {
-        double ST = (S0 * exp(precomputed_stuff * Z_tab[i])) - K;
-        double payoff = std::max(ST, 0.0);
-        sum_payoffs += payoff;
+        tmpliste[i] = exp(precomputed_stuff * Z_tab[i]);
     }
+    #pragma omp unroll
+    for (ui64 i = 0; i < num_simulations; ++i) {
+        double payoff = S0 * tmpliste[i] - K;
+        // sum_payoffs += std::max(payoff, 0.0);
+        sum_payoffs += payoff > 0.0 ? payoff : 0.0;
+    }
+
+    // for (ui64 i = 0; i < num_simulations; ++i) {
+    //     double ST = (S0 * exp(precomputed_stuff * Z_tab[i])) - K;
+    //     double payoff = std::max(ST, 0.0);
+    //     sum_payoffs += payoff;
+    // }
     return sum_payoffs * precomputed_return;
 }
 
@@ -140,12 +141,16 @@ int main(int argc, char* argv[]) {
     // VSLStreamStatePtr stream;
     // Seems faster than VSL_BRNG_MT19937. DO NOT USE VSL_BRNG_NONDETERM AS IT IS SUPER SLOW AND DISREGARDS SEED!!!
     // vslNewStream(&stream, VSL_BRNG_MCG59, global_seed);
-    vslNewStream(&parallel_streams[0], VSL_BRNG_MCG59, global_seed);
-    for (ui64 i = 1; i < num_runs; ++i)
-    {
-        vslCopyStream(&parallel_streams[i], parallel_streams[i - 1]);
-        vslSkipAheadStream(parallel_streams[i], num_simulations * i);
-    }
+    // vslNewStream(&parallel_streams[0], VSL_BRNG_MCG59, global_seed);
+    // #pragma omp parallel for schedule(runtime)
+    // for (ui64 i = 1; i < num_runs; ++i)
+    // {
+    //     vslCopyStream(&parallel_streams[i], parallel_streams[i - 1]);
+    //     vslSkipAheadStream(parallel_streams[i], num_simulations * i);
+    // }
+    // for (ui64 i = 0; i < num_runs; ++i) {
+    //     vslNewStream(&parallel_streams[i], VSL_BRNG_MCG59, global_seed+i);
+    // }
 
     double precomputed_return = exp(-r * T) * (1.0 / num_simulations);  // This might lose in precision!!!
     double precomputed_start = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
@@ -154,15 +159,16 @@ int main(int argc, char* argv[]) {
         double partial_sum = 0.0;
         double* Z_tab = (double*)malloc(num_simulations * sizeof(double));
         double* tmpliste = (double*)malloc(num_simulations * sizeof(double));
-        #pragma omp for schedule(runtime)
+        #pragma omp for schedule(runtime) reduction(+:sum)
         for (ui64 run = 0; run < num_runs; ++run) {
-            partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, parallel_streams[run], Z_tab, tmpliste);
-            // partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, stream, Z_tab, tmpliste);
+            vslNewStream(&parallel_streams[run], VSL_BRNG_MCG59, global_seed+run);
+            sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, parallel_streams[run], Z_tab, tmpliste);
+            // partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, parallel_streams[run], Z_tab, tmpliste);
         }
         free(Z_tab);
         free(tmpliste);
-        #pragma omp atomic
-        sum += partial_sum;
+        // #pragma omp atomic
+        // sum += partial_sum;
     }
     // vslDeleteStream(&stream);
     for (ui64 i = 0; i < num_runs; ++i)
