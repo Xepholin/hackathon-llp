@@ -165,25 +165,25 @@ double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations,
 //     } while (svptest_any(svptrue_b64(), pg));
 
     // Said loop to be vectorized by above code
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i)
-    {
-        tmpliste[i] = exp(precomputed_stuff * Z_tab[i]);
-    }
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i)
-    {
-        double payoff = S0 * tmpliste[i] - K;
-        sum_payoffs += payoff > 0.0 ? payoff : 0.0;
-    }
-
-    // Enhanced initial loop
+    // #pragma vector always
     // for (ui64 i = 0; i < num_simulations; ++i)
     // {
-    //     double ST = (S0 * exp(precomputed_stuff * Z_tab[i])) - K;
-    //     double payoff = std::max(ST, 0.0);
-    //     sum_payoffs += payoff;
+    //     tmpliste[i] = exp(precomputed_stuff * Z_tab[i]);
     // }
+    // #pragma vector always
+    // for (ui64 i = 0; i < num_simulations; ++i)
+    // {
+    //     double payoff = S0 * tmpliste[i] - K;
+    //     sum_payoffs += payoff > 0.0 ? payoff : 0.0;
+    // }
+
+    // Enhanced initial loop
+    for (ui64 i = 0; i < num_simulations; ++i)
+    {
+        double ST = (S0 * exp(precomputed_stuff * Z_tab[i])) - K;
+        double payoff = std::max(ST, 0.0);
+        sum_payoffs += payoff;
+    }
     return sum_payoffs * precomputed_return;
 }
 
@@ -270,13 +270,14 @@ int main(int argc, char* argv[]) {
         double* tmpliste = (double*)malloc(num_simulations * sizeof(double));
         #ifdef _OPENMP
         int thread_rank  = omp_get_thread_num();
+        double partial_sum = 0.0;
         #endif
 
-        #pragma omp for schedule(runtime) reduction(+:sum)
+        #pragma omp for schedule(runtime)
         for (ui64 run = 0; run < num_runs; ++run)
         {
             #ifdef _OPENMP
-            sum += black_scholes_monte_carlo(S0, K, num_simulations,
+            partial_sum += black_scholes_monte_carlo(S0, K, num_simulations,
                                              precomputed_start,
                                              precomputed_return,
                                              parallel_streams[thread_rank],
@@ -302,8 +303,10 @@ int main(int argc, char* argv[]) {
         free(Z_tab);
         free(tmpliste);
 
-        // #pragma omp atomic
-        // sum += partial_sum;
+        #ifdef _OPENMP
+        #pragma omp atomic
+        sum += partial_sum;
+        #endif
     }
 
     double t2=dml_micros();
