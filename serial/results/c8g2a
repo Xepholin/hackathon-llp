@@ -1,1 +1,2 @@
-/var/spool/slurmd/job00147/slurm_script: line 20: ./c8ga.exe: No such file or directory
+Global initial seed: 627742206      argv[1]= 1000000     argv[2]= 1000000
+ value= 5.199332 in 114.839654 seconds
