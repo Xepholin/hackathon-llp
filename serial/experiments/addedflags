@@ -1,0 +1,14 @@
+Starting
+g++ -mcpu=neoverse-v2 -O3 -fopenmp -funroll-loops -ftree-vectorize -g -fno-omit-frame-pointer BSM.cxx -o tested_program.exe
+
+Starting v3
+g++ -mcpu=neoverse-v2 -O3 -fopenmp -funroll-loops -ftree-vectorize -finline-functions -I/tools/acfl/24.10/armpl-24.10.1_AmazonLinux-2_gcc/include -larmpl -L/tools/acfl/24.10/armpl-24.10.1_AmazonLinux-2_gcc/lib -larmpl_mp -g -fno-omit-frame-pointer BSM.cxx -o tested_program.exe
+
+Starting v3
+armclang++ -mcpu=neoverse-512tvb -O3 -funroll-loops -fvectorize -armpl -g -fno-omit-frame-pointer BSM.cxx -o tested_program.exe
+
+Starting v4
+armclang++ -mcpu=neoverse-512tvb -O3 -fopenmp -funroll-loops -fvectorize -finline-functions -armpl -lamath -lm -g -fno-omit-frame-pointer BSM.cxx -o tested_program.exe
+
+Starting final
+armclang++ -mcpu=neoverse-512tvb -O3 -fopenmp -funroll-loops -fvectorize -ffinite-math-only -funsafe-math-optimizations -fno-math-errno -finline-functions -armpl -lamath -lm -g -fno-omit-frame-pointer BSM.cxx -o tested_program.exe

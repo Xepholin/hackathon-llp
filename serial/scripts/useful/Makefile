@@ -14,10 +14,4 @@ run:
 maqao:
 	sbatch start.sh
 
-maqao_onethread:
-	sbatch start_maq1.sh
-
-maqao_mid:
-	sbatch start_maqmid.sh
-
 .PHONY: compil run maqao
