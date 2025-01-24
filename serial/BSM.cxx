@@ -38,7 +38,13 @@ Global initial seed: 4208275479      argv[1]= 100     argv[2]= 1000000
 #include <algorithm>
 #include <iomanip>   // For setting precision
 
+// Added includes
 #include <armpl.h>
+// #include <arm_sve.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+//
 
 #define ui64 u_int64_t
 
@@ -53,9 +59,24 @@ dml_micros()
 }
 
 
+// Helper function from ArmPL doc example
+// https://developer.arm.com/documentation/101004/2410/Open-Random-Number-Generation--OpenRNG--Reference-Guide/Examples/skipahead-c?lang=en#skipahead-c
+void assert_ok(int err, const char *message)
+{
+  if (err != VSL_ERROR_OK)
+  {
+    fprintf(stderr, "Error: %s\n", message);
+    exit(EXIT_FAILURE);
+  }
+}
+
+
 // Function to generate Gaussian noise using ArmPL
-void gaussian_armpl(const int taille, double* noise, VSLStreamStatePtr stream) {
-    vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, taille, noise, 0, 1);
+void gaussian_armpl(const int taille, double* noise, VSLStreamStatePtr stream)
+{
+    assert_ok(vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
+                            stream, taille, noise, 0, 1),
+              "Number generation failed!");
 }
 
 
@@ -67,41 +88,93 @@ double gaussian_box_muller() {
     return distribution(generator);
 }
 
-// Function to calculate the Black-Scholes call option price using Monte Carlo method
-double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations, double precomputed_stuff, double precomputed_return, VSLStreamStatePtr stream, double* Z_tab, double* tmpliste) {
+
+// Function to calculate the Black-Scholes call option price using
+//  Monte Carlo method
+double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations,
+                                 double precomputed_stuff,
+                                 double precomputed_return,
+                                 VSLStreamStatePtr stream, double* Z_tab,
+                                 double* tmpliste)
+{
     double sum_payoffs = 0.0;
     gaussian_armpl(num_simulations, Z_tab, stream);
+
     // Attempting to vectorize some parts of the computation
-    // This might be slower due to reading tmplist multiple times
+    // This might be slower due to reading tmplist multiple times (it is slower)
     // #pragma vector always
-    // for (ui64 i = 0; i < num_simulations; ++i) {
+    // for (ui64 i = 0; i < num_simulations; ++i)
+    // {
     //     tmpliste[i] = precomputed_stuff * Z_tab[i];
     // }
-    // for (ui64 i = 0; i < num_simulations; ++i) {
+    // #pragma vector always
+    // for (ui64 i = 0; i < num_simulations; ++i)
+    // {
     //     tmpliste[i] = exp(tmpliste[i]);
     // }
     // #pragma vector always
-    // for (ui64 i = 0; i < num_simulations; ++i) {
+    // for (ui64 i = 0; i < num_simulations; ++i)
+    // {
     //     tmpliste[i] = S0 * tmpliste[i] - K;
     // }
     // #pragma vector always
-    // for (ui64 i = 0; i < num_simulations; ++i) {
-    //     // double Z = gaussian_box_muller();
+    // for (ui64 i = 0; i < num_simulations; ++i)
+    // {
     //     if (tmpliste[i] > 0.0)
     //         sum_payoffs += tmpliste[i];
     // }
 
-    for (ui64 i = 0; i < num_simulations; ++i) {
+    // THE FOLLOWING COMMENTED CODE DOES NOT COMPILE!!!
+    // Attempt at vectorizing following loop using intrinsics
+    // If it is efficient but compiler doesn't fusion loops,
+    //  it might be a good idea to try to extend this to the other loop
+    // The loop should end when Z_tab doesn't have any element anymore,
+    //  and will compute a zero as the second element if num_simulations is odd
+//     ui64 vec_len = svcntd();  // Vector lenght
+//     ui64 offset = 0;
+//     svbool_t pg = svwhilelt_b64(offset, num_simulations);
+//     do
+//     {
+//         // Load Z_tab into an SVE vector, with an offset
+//         svfloat64_t vec_z = svld1_vnum(pg, Z_tab, offset);
+//
+//         // Multiply by precomputed_stuff
+//         // Uses svdup to put it in a vector and allow svmul to work
+//         svfloat64_t vec_precomp = svdup_f64(precomputed_stuff);
+//         svfloat64_t vec_product = svmul_z(pg, vec_z, vec_precomp);
+//
+//         // This is from Neon and not SVE!!! That might be why GCC dies
+//         // Trying to bypass svexpa_f64 wanting svuint64_t
+//         //      (I'll be frank I've no idea how it works)
+//         svuint64_t to_exp = svreinterpret_u64_f64(vec_product);
+//
+//         // Floating-point exponential accelerator
+//         // "This instruction is unpredicated."" (cf arm's doc)
+//         svfloat64_t vec_result = svexpa_f64(to_exp);
+//
+//         // Store result
+//         svst1(pg, tmpliste+offset, vec_product);
+//         // svst1(pg, tmpliste, vec_result);
+//         offset += vec_len;
+//         pg = svwhilelt_b64(offset, num_simulations);
+//     } while (svptest_any(svptrue_b64(), pg));
+
+    // Said loop to be vectorized by above code
+    #pragma vector always
+    for (ui64 i = 0; i < num_simulations; ++i)
+    {
         tmpliste[i] = exp(precomputed_stuff * Z_tab[i]);
     }
-    #pragma omp unroll
-    for (ui64 i = 0; i < num_simulations; ++i) {
+    #pragma vector always
+    for (ui64 i = 0; i < num_simulations; ++i)
+    {
         double payoff = S0 * tmpliste[i] - K;
-        // sum_payoffs += std::max(payoff, 0.0);
         sum_payoffs += payoff > 0.0 ? payoff : 0.0;
     }
 
-    // for (ui64 i = 0; i < num_simulations; ++i) {
+    // Enhanced initial loop
+    // for (ui64 i = 0; i < num_simulations; ++i)
+    // {
     //     double ST = (S0 * exp(precomputed_stuff * Z_tab[i])) - K;
     //     double payoff = std::max(ST, 0.0);
     //     sum_payoffs += payoff;
@@ -136,44 +209,96 @@ int main(int argc, char* argv[]) {
     double sum=0.0;
     double t1=dml_micros();
 
-    // https://developer.arm.com/documentation/101004/2410/Open-Random-Number-Generation--OpenRNG--Reference-Guide/Examples/skipahead-c?lang=en#skipahead-c
-    VSLStreamStatePtr parallel_streams[num_runs];
-    // VSLStreamStatePtr stream;
-    // Seems faster than VSL_BRNG_MT19937. DO NOT USE VSL_BRNG_NONDETERM AS IT IS SUPER SLOW AND DISREGARDS SEED!!!
-    // vslNewStream(&stream, VSL_BRNG_MCG59, global_seed);
-    // vslNewStream(&parallel_streams[0], VSL_BRNG_MCG59, global_seed);
-    // #pragma omp parallel for schedule(runtime)
-    // for (ui64 i = 1; i < num_runs; ++i)
-    // {
-    //     vslCopyStream(&parallel_streams[i], parallel_streams[i - 1]);
-    //     vslSkipAheadStream(parallel_streams[i], num_simulations * i);
-    // }
-    // for (ui64 i = 0; i < num_runs; ++i) {
-    //     vslNewStream(&parallel_streams[i], VSL_BRNG_MCG59, global_seed+i);
-    // }
-
-    double precomputed_return = exp(-r * T) * (1.0 / num_simulations);  // This might lose in precision!!!
-    double precomputed_start = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
+    // Trying to respect code compiling without -fopenmp
+    #ifdef _OPENMP
+    int num_threads;
     #pragma omp parallel default(shared)
     {
-        double partial_sum = 0.0;
-        double* Z_tab = (double*)malloc(num_simulations * sizeof(double));
-        double* tmpliste = (double*)malloc(num_simulations * sizeof(double));
-        #pragma omp for schedule(runtime) reduction(+:sum)
-        for (ui64 run = 0; run < num_runs; ++run) {
-            vslNewStream(&parallel_streams[run], VSL_BRNG_MCG59, global_seed+run);
-            sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, parallel_streams[run], Z_tab, tmpliste);
-            // partial_sum += black_scholes_monte_carlo(S0, K, num_simulations, precomputed_start, precomputed_return, parallel_streams[run], Z_tab, tmpliste);
+        #pragma omp single
+        {
+            num_threads = omp_get_num_threads();
+            // std::cerr << "Using " << num_threads << " threads." << std::endl;
         }
+    }
+    #endif
+
+    #ifdef _OPENMP
+    VSLStreamStatePtr parallel_streams[num_threads];
+    #else
+    VSLStreamStatePtr stream;
+    #endif
+
+    // VSL_BRNG_MCG59 seems faster than VSL_BRNG_MT19937.
+    // DO NOT USE VSL_BRNG_NONDETERM AS IT IS SUPER SLOW AND DISREGARDS SEED!!!
+
+    #ifdef _OPENMP
+    assert_ok(vslNewStream(&parallel_streams[0], VSL_BRNG_MCG59, global_seed),
+              "vslNewStreamFailed");
+    #else
+    assert_ok(vslNewStream(&stream, VSL_BRNG_MCG59, global_seed),
+              "vslNewStreamFailed");
+    #endif
+
+    // This precomputing might make us lose in precision!!!
+    double precomputed_return = exp(-r * T) * (1.0 / num_simulations);
+    double precomputed_start  = (r - q - 0.5 * sigma * sigma)
+                                 * T + sigma * sqrt(T);
+
+    // "Distributing" streams on each thread
+    #ifdef _OPENMP  // Doing this part in parallel breaks things :/
+    for (ui64 i = 1; i < num_threads; ++i)
+    {
+        assert_ok(vslCopyStream(&parallel_streams[i],
+                                parallel_streams[i - 1]),
+                  "vslCopyStream");
+        // Taking more in case num_threads is not a factor
+        assert_ok(vslSkipAheadStream(parallel_streams[i],
+                                     ((num_simulations * num_runs)
+                                     / num_threads)
+                                     + (num_simulations * num_runs)),
+                  "vslSkipAhead");
+    }
+    #endif
+    #pragma omp parallel default(shared)
+    {
+        double* Z_tab    = (double*)malloc(num_simulations * sizeof(double));
+        double* tmpliste = (double*)malloc(num_simulations * sizeof(double));
+        #ifdef _OPENMP
+        int thread_rank  = omp_get_thread_num();
+        #endif
+
+        #pragma omp for schedule(runtime) reduction(+:sum)
+        for (ui64 run = 0; run < num_runs; ++run)
+        {
+            #ifdef _OPENMP
+            sum += black_scholes_monte_carlo(S0, K, num_simulations,
+                                             precomputed_start,
+                                             precomputed_return,
+                                             parallel_streams[thread_rank],
+                                             Z_tab, tmpliste);
+            #else
+            sum += black_scholes_monte_carlo(S0, K, num_simulations,
+                                             precomputed_start,
+                                             precomputed_return,
+                                             stream, Z_tab, tmpliste);
+            #endif
+        }
+
+        // Cleaning memory
+        #ifdef _OPENMP
+        #pragma omp for schedule(static, 1)
+        for (ui64 i = 0; i < num_threads; ++i)
+        {
+            assert_ok(vslDeleteStream(&parallel_streams[i]), "vslDeleteStream");
+        }
+        #else
+        assert_ok(vslDeleteStream(&stream), "vslDeleteStream");
+        #endif
         free(Z_tab);
         free(tmpliste);
+
         // #pragma omp atomic
         // sum += partial_sum;
-    }
-    // vslDeleteStream(&stream);
-    for (ui64 i = 0; i < num_runs; ++i)
-    {
-        vslDeleteStream(&parallel_streams[i]);
     }
 
     double t2=dml_micros();
