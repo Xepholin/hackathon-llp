@@ -41,6 +41,7 @@ Global initial seed: 4208275479      argv[1]= 100     argv[2]= 1000000
 // Added includes
 #include <armpl.h>
 // #include <arm_sve.h>
+// #include <arm_neon.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -74,9 +75,11 @@ void assert_ok(int err, const char *message)
 // Function to generate Gaussian noise using ArmPL
 void gaussian_armpl(const int taille, double* noise, VSLStreamStatePtr stream)
 {
-    assert_ok(vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
-                            stream, taille, noise, 0, 1),
-              "Number generation failed!");
+    // assert_ok(vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
+    //                         stream, taille, noise, 0, 1),
+    //           "Number generation failed!");
+    vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
+                  stream, taille, noise, 0, 1);
 }
 
 
@@ -124,7 +127,9 @@ double black_scholes_monte_carlo(ui64 S0, ui64 K, ui64 num_simulations,
     //         sum_payoffs += tmpliste[i];
     // }
 
-    // THE FOLLOWING COMMENTED CODE DOES NOT COMPILE!!!
+    // THE FOLLOWING COMMENTED CODE DOES NOT WORK!!!
+    // It does not compile with gcc and segfault with armclang
+    // armclang vectorizes the loop btw
     // Attempt at vectorizing following loop using intrinsics
     // If it is efficient but compiler doesn't fusion loops,
     //  it might be a good idea to try to extend this to the other loop
