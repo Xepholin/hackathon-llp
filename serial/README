@@ -1,24 +1,21 @@
 This should probably be in Markdown but oh well
 
-So for the Makefile, you can edit flags if you want, and it should be changed to be less a dumb giant script ; do note that some flags may be a bit different between gcc and armclang, so maybe a GCCFLAGS would make sense.
+The Makefile should've been changed to be less a dumb giant script, but this version works so it's fine.
 
 Be sure to load the gnu module for gcc and BOTH the gnu and acfl modules for amdclang!!!
+Also you should always run the commands in the scripts/useful/init.sh before doings things on the machine.
 
 Usage :
-make -> compile BSM.cxx to tested_program.exe with g++
-make armclang -> com BSM.cxx to tested_program.exe with armclang
-make run -> run tested_program.exe on the cluster
-make maqao -> run tested_program.exe on the cluster using MAQAO, for profiling purposes
+make -> compiles BSM.cxx to tested_program.exe with g++
+make armclang -> compiles BSM.cxx to tested_program.exe with armclang
+make run -> runs tested_program.exe on the cluster
+make maqao -> runs tested_program.exe on the cluster using MAQAO, for profiling purposes
 
-BSM_ref.cxx is the base file, DO NOT change it.
+The experiments folder contains source files of different versions of the code.
+The scripts folder contains some scripts we used, they may not all be pertinent.
+The doc folder contains documentation provided for the Hackathon, not ours.
 
-BSM.cxx is the latest version of the optimized file, only push result that appear right in it. You're free to upload extra versions if you want, like BSM_changed_random.cxx for exemple (this file do not exist).
-
-Used flags :
--mcpu=neoverse-512tvb -> Tunes the program for Graviton 4 ONLY, DO NOT RUN SUCH PROGRAM ON GRAVITON 3
--fopenmp -> OpenMP support
--funroll-loops -> Tells GCC to unroll loops which size can be determined at compile time (implies -frerun-cse-after-loop -fweb -frename-registers)
--ftree-vectorize -> This allows vectorization on trees (implies -ftree-vectorize -ftree-slp-vectorize, which are both included in O2)
--finline-functions -> Consider every function for inlining, even if not declared as such in the code. THIS IS INCLUDED STARTING O2 SO I GOTTA REMOVE IT.
--lamath -> Links ARM's math lib, which is good. THIS FLAG MUS BE SET BEFORE -lm.
--lm -> Math lib.
+The results folder contains :
+c7g* -> results on the Graviton 3 machine, with a 2 loops version of the program (cf experiments/BSMv7.exe), g++ and -lamath.
+c8g* -> results on the Graviton 3 machine, with a 2 loops version of the program (cf experiments/BSMv7.exe), g++ and -lamath.
+c8g*a -> results on the Graviton 4 machine, with latest version of the program (BSM.cxx), armclang++.
