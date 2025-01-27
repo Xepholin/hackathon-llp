@@ -17,4 +17,4 @@ module load openmpi5
 # (remplacez ces lignes par les commandes réelles de votre script)
 
 export SRUN_CPUS_PER_TASK=96
-OMP_NUM_THREADS=96 OMP_PLACES=cores OMP_PROC_BIND=close ./tested_program.exe 10000000 1000
+OMP_NUM_THREADS=96 OMP_PLACES=cores OMP_PROC_BIND=close ./tested_program.exe 1000000 1000

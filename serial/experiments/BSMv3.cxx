@@ -199,6 +199,15 @@ int main(int argc, char* argv[]) {
                                             precomp_one, precomp_two, stream);
             #endif
         }
+        #ifdef _OPENMP
+        #pragma omp for schedule(static, 1)
+        for (ui64 i = 0; i < num_threads; ++i)
+        {
+            assert_ok(vslDeleteStream(&parallel_streams[i]), "vslDeleteStream");
+        }
+        #else
+        assert_ok(vslDeleteStream(&stream), "vslDeleteStream");
+        #endif
     }
     double t2=dml_micros();
     std::cout << std::fixed << std::setprecision(6) << " value= " << sum/num_runs << " in " << (t2-t1)/1000000.0 << " seconds" << std::endl;

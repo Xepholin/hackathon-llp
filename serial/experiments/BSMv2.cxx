@@ -107,6 +107,7 @@ int main(int argc, char* argv[]) {
     double t1=dml_micros();
     double precomp_one = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
     double precomp_two = exp(-r * T) * (1.0 / num_simulations);
+    #pragma omp parallel for reduction(+:sum) default(shared) schedule(runtime)
     for (ui64 run = 0; run < num_runs; ++run) {
         sum+= black_scholes_monte_carlo(S0, K, T, r, sigma, q, num_simulations,
                                         precomp_one, precomp_two);

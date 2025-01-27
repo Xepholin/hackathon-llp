@@ -31,15 +31,17 @@ Global initial seed: 4208275479      argv[1]= 100     argv[2]= 1000000
 */
 
 #include <iostream>
-#include <cmath> // Pour std::erf et std::sqrt
+#include <cmath>  // Pour std::erf et std::sqrt
 #include <random>
 #include <vector>
 #include <limits>
 #include <algorithm>
 #include <iomanip>   // For setting precision
 
-// Addded includes
+// Added includes
 #include <armpl.h>
+// #include <arm_sve.h>
+// #include <arm_neon.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -57,6 +59,7 @@ dml_micros()
         return((tv.tv_sec*1000000.0)+tv.tv_usec);
 }
 
+
 // Helper function from ArmPL doc example
 // https://developer.arm.com/documentation/101004/2410/Open-Random-Number-Generation--OpenRNG--Reference-Guide/Examples/skipahead-c?lang=en#skipahead-c
 void assert_ok(int err, const char *message)
@@ -72,53 +75,41 @@ void assert_ok(int err, const char *message)
 // Function to generate Gaussian noise using ArmPL
 void gaussian_armpl(const int taille, double* noise, VSLStreamStatePtr stream)
 {
-    assert_ok(vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
-                            stream, taille, noise, 0, 1),
-              "Number generation failed!");
+    // assert_ok(vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
+    //                         stream, taille, noise, 0, 1),
+    //           "Number generation failed!");
+    vdRngGaussian(VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2,
+                  stream, taille, noise, 0, 1);
 }
 
 
+// Unused
 // Function to generate Gaussian noise using Box-Muller transform
-double gaussian_box_muller()
-{
+double gaussian_box_muller() {
     static std::mt19937 generator(std::random_device{}());
     static std::normal_distribution<double> distribution(0.0, 1.0);
     return distribution(generator);
 }
 
-// Function to calculate the Black-Scholes call option price using Monte Carlo method
+
+// Function to calculate the Black-Scholes call option price using
+//  Monte Carlo method
 double black_scholes_monte_carlo(ui64 S0, ui64 K, double T, double r,
-                                 double sigma, double q, ui64 num_simulations,
-                                 double precomp_one, double precomp_two,
-                                 VSLStreamStatePtr stream, double* tmpliste)
+                                 double sigma, double q,
+                                 ui64 num_simulations,
+                                 VSLStreamStatePtr stream, double* Z_tab,
+                                 double* tmpliste)
 {
     double sum_payoffs = 0.0;
-    double Z_tab[num_simulations];
     gaussian_armpl(num_simulations, Z_tab, stream);
-    // Attempting to vectorize some parts of the computation
-    // This might be slower due to reading tmplist multiple times (it is slower)
-    #pragma vector always
     for (ui64 i = 0; i < num_simulations; ++i)
     {
-        tmpliste[i] = precomp_one * Z_tab[i];
+        double ST = (S0 * exp((r - q - 0.5 * sigma * sigma)* T + sigma *
+                     sqrt(T) * Z_tab[i])) - K;
+        double payoff = std::max(ST, 0.0);
+        sum_payoffs += payoff;
     }
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i)
-    {
-        tmpliste[i] = exp(tmpliste[i]);
-    }
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i)
-    {
-        tmpliste[i] = S0 * tmpliste[i] - K;
-    }
-    #pragma vector always
-    for (ui64 i = 0; i < num_simulations; ++i)
-    {
-        if (tmpliste[i] > 0.0)
-            sum_payoffs += tmpliste[i];
-    }
-    return sum_payoffs * precomp_two;
+    return exp(-r * T) * (sum_payoffs / num_simulations);
 }
 
 
@@ -193,31 +184,31 @@ int main(int argc, char* argv[]) {
                   "vslSkipAhead");
     }
     #endif
-
-    double precomp_one = (r - q - 0.5 * sigma * sigma) * T + sigma * sqrt(T);
-    double precomp_two = exp(-r * T) * (1.0 / num_simulations);
     #pragma omp parallel default(shared)
     {
-        #ifdef _OPENMP
-        int thread_rank = omp_get_thread_num();
-        #endif
+        double* Z_tab    = (double*)malloc(num_simulations * sizeof(double));
         double* tmpliste = (double*)malloc(num_simulations * sizeof(double));
-        #pragma omp for reduction(+:sum)
+        #ifdef _OPENMP
+        int thread_rank  = omp_get_thread_num();
+        double partial_sum = 0.0;
+        #endif
+
+        #pragma omp for schedule(runtime)
         for (ui64 run = 0; run < num_runs; ++run)
         {
             #ifdef _OPENMP
-            sum += black_scholes_monte_carlo(S0, K, T, r, sigma, q,
-                                            num_simulations,
-                                            precomp_one, precomp_two,
-                                            parallel_streams[thread_rank],
-                                            tmpliste);
+            partial_sum += black_scholes_monte_carlo(S0, K, T, r, sigma, q,
+                                                     num_simulations,
+                                                     parallel_streams[thread_rank],
+                                                     Z_tab, tmpliste);
             #else
-            sum += black_scholes_monte_carlo(S0, K, T, r, sigma, q,
-                                            num_simulations,
-                                            precomp_one, precomp_two, stream,
-                                            tmpliste);
+            sum += black_scholes_monte_carlo(S0, K,  T, r, sigma, q,
+                                             num_simulations,
+                                             stream, Z_tab, tmpliste);
             #endif
         }
+
+        // Cleaning memory
         #ifdef _OPENMP
         #pragma omp for schedule(static, 1)
         for (ui64 i = 0; i < num_threads; ++i)
@@ -227,8 +218,15 @@ int main(int argc, char* argv[]) {
         #else
         assert_ok(vslDeleteStream(&stream), "vslDeleteStream");
         #endif
+        free(Z_tab);
         free(tmpliste);
+
+        #ifdef _OPENMP
+        #pragma omp atomic
+        sum += partial_sum;
+        #endif
     }
+
     double t2=dml_micros();
     std::cout << std::fixed << std::setprecision(6) << " value= " << sum/num_runs << " in " << (t2-t1)/1000000.0 << " seconds" << std::endl;
 

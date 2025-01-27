@@ -195,6 +195,15 @@ int main(int argc, char* argv[]) {
                                             tmpliste, Z_tab);
             #endif
         }
+        #ifdef _OPENMP
+        #pragma omp for schedule(static, 1)
+        for (ui64 i = 0; i < num_threads; ++i)
+        {
+            assert_ok(vslDeleteStream(&parallel_streams[i]), "vslDeleteStream");
+        }
+        #else
+        assert_ok(vslDeleteStream(&stream), "vslDeleteStream");
+        #endif
         free(tmpliste);
     }
     double t2=dml_micros();
